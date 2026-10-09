@@ -1,0 +1,1 @@
+"""Учебный Telegram-магазин Scentory."""
