@@ -1,20 +1,15 @@
 import asyncio
 import sqlite3
-import unittest
 from unittest.mock import patch
 
-from aiogram.types import Update
+import support
 
-import test_cart
 from scentory.database.connection import connect, initialize_database
 from scentory.database.orders import CheckoutError
 from scentory.database.repository import Repository
-from scentory.handlers.orders import create_orders_router
 
 
-class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
-    asyncSetUp = test_cart.CartDatabaseTests.asyncSetUp
-
+class CheckoutDatabaseTests(support.CustomerDatabaseTestCase):
     async def prepare(self):
         await self.repository.add_to_cart(101, self.product_id, 2)
         key = await self.repository.begin_checkout(101)
@@ -39,7 +34,10 @@ class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_historical_price_and_name(self):
         order_id = await self.repository.confirm_checkout(101, await self.prepare())
         async with connect(self.path) as db:
-            await db.execute("UPDATE products SET price_kopecks = 100, name = 'Изменён' WHERE id = ?", (self.product_id,))
+            await db.execute(
+                "UPDATE products SET price_kopecks = 100, name = 'Изменён' WHERE id = ?",
+                (self.product_id,),
+            )
             await db.commit()
         order = await self.repository.get_order(101, order_id)
         self.assertEqual(order["items"][0]["price_kopecks"], 189000)
@@ -74,7 +72,9 @@ class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
         key = await self.repository.begin_checkout(101)
         await self.repository.prepare_checkout(101, "Псевдоним")
         async with connect(self.path) as db:
-            await db.execute("UPDATE products SET price_kopecks = 200000 WHERE id = ?", (self.product_id,))
+            await db.execute(
+                "UPDATE products SET price_kopecks = 200000 WHERE id = ?", (self.product_id,)
+            )
             await db.commit()
         with self.assertRaisesRegex(CheckoutError, "изменились"):
             await self.repository.confirm_checkout(101, key)
@@ -85,7 +85,9 @@ class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.begin_checkout(101)
         key = await self.prepare()
         async with connect(self.path) as db:
-            await db.execute("UPDATE products SET is_available = 0 WHERE id = ?", (self.product_id,))
+            await db.execute(
+                "UPDATE products SET is_available = 0 WHERE id = ?", (self.product_id,)
+            )
             await db.commit()
         with self.assertRaises(CheckoutError):
             await self.repository.confirm_checkout(101, key)
@@ -118,12 +120,18 @@ class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_rollback_at_each_write_boundary(self):
         await self.repository.add_to_cart(101, 2)
         key = await self.prepare()
-        for table, operation in (("orders", "INSERT"), ("order_items", "INSERT"),
-                                 ("cart_items", "DELETE"), ("checkout_drafts", "DELETE")):
+        for table, operation in (
+            ("orders", "INSERT"),
+            ("order_items", "INSERT"),
+            ("cart_items", "DELETE"),
+            ("checkout_drafts", "DELETE"),
+        ):
             async with connect(self.path) as db:
                 # Для позиций сбой после первой вставки проверяет частичную запись.
                 condition = "WHEN NEW.product_id = 2" if table == "order_items" else ""
-                await db.execute(f"CREATE TRIGGER fail BEFORE {operation} ON {table} {condition} BEGIN SELECT RAISE(ABORT, 'test'); END")
+                await db.execute(
+                    f"CREATE TRIGGER fail BEFORE {operation} ON {table} {condition} BEGIN SELECT RAISE(ABORT, 'test'); END"
+                )
                 await db.commit()
             with self.subTest(table=table), self.assertRaises(sqlite3.IntegrityError):
                 await self.repository.confirm_checkout(101, key)
@@ -156,28 +164,13 @@ class CheckoutDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(set(o["id"] for o in first[:10]) & set(o["id"] for o in second))
 
 
-class CheckoutRoutingTests(unittest.IsolatedAsyncioTestCase):
-    send = test_cart.CartRoutingTests.send
-    asyncTearDown = test_cart.CartRoutingTests.asyncTearDown
-
+class CheckoutRoutingTests(support.BotTestCase):
     async def asyncSetUp(self):
-        await test_cart.CartRoutingTests.asyncSetUp(self)
-        # Перед fallback подключаем через публичный API нового диспетчера.
-        from aiogram import Dispatcher
-        from scentory.handlers.catalog import create_catalog_router
-        from scentory.handlers.checkout import create_checkout_router
-        from scentory.handlers.cart import create_cart_router
-        from scentory.handlers.common import create_router
-        self.dispatcher = Dispatcher(**self.dispatcher.workflow_data)
-        for router in (create_catalog_router(), create_checkout_router(), create_orders_router(), create_cart_router(), create_router()):
-            self.dispatcher.include_router(router)
+        await super().asyncSetUp()
+        await self.send()
 
     async def name(self, value="Учебный покупатель"):
-        self.bot.session.reset_mock()
-        await self.dispatcher.feed_update(self.bot, Update.model_validate({"update_id": 3, "message": {
-            "message_id": 2, "date": 1, "chat": {"id": 101, "type": "private"},
-            "from": {"id": 101, "is_bot": False, "first_name": "Учебный"}, "text": value}}))
-        return self.bot.session.call_args.args[1]
+        return (await self.send(text=value))[-1]
 
     async def test_complete_flow_repeat_and_details(self):
         await self.send("cart:add:1")
@@ -193,7 +186,9 @@ class CheckoutRoutingTests(unittest.IsolatedAsyncioTestCase):
         details = (await self.send(detail_data))[-1]
         self.assertIn("Статус: Новый", details.text)
         self.assertIn("Учебный покупатель", details.text)
-        self.assertIn("№1", (await self.send("menu:orders"))[-1].reply_markup.inline_keyboard[0][0].text)
+        self.assertIn(
+            "№1", (await self.send("menu:orders"))[-1].reply_markup.inline_keyboard[0][0].text
+        )
         self.assertIn("недоступен", (await self.send(detail_data, user_id=202))[-1].text)
         self.assertIn("устарело", (await self.send(confirm, user_id=202))[-1].text)
 
@@ -207,14 +202,19 @@ class CheckoutRoutingTests(unittest.IsolatedAsyncioTestCase):
         await self.send("cart:checkout")
         review = await self.name()
         await self.send()  # /start отменяет незавершённый черновик.
-        self.assertIn("устарело", (await self.send(review.reply_markup.inline_keyboard[0][0].callback_data))[-1].text)
+        self.assertIn(
+            "устарело",
+            (await self.send(review.reply_markup.inline_keyboard[0][0].callback_data))[-1].text,
+        )
 
     async def test_failed_confirmation_can_retry(self):
         await self.send("cart:add:1")
         await self.send("cart:checkout")
         review = await self.name()
         confirm = review.reply_markup.inline_keyboard[0][0].callback_data
-        with patch.object(self.repository, "confirm_checkout", side_effect=sqlite3.OperationalError("test")):
+        with patch.object(
+            self.repository, "confirm_checkout", side_effect=sqlite3.OperationalError("test")
+        ):
             self.assertIn("Ошибка БД", (await self.send(confirm))[-1].text)
         self.assertIn("сохранён", (await self.send(confirm))[-1].text)
 

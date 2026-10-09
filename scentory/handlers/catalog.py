@@ -28,7 +28,9 @@ def create_catalog_router() -> Router:
             return
         await callback.answer()
         await callback.message.answer(
-            "Каталог Scentory\nВыберите аромат:" if products else "В каталоге пока нет доступных ароматов.",
+            "Каталог Scentory\nВыберите аромат:"
+            if products
+            else "В каталоге пока нет доступных ароматов.",
             reply_markup=catalog_menu(products),
         )
 
@@ -45,10 +47,14 @@ def create_catalog_router() -> Router:
             product = await repository.get_product(int(value))
         except sqlite3.Error:
             logger.error("Не удалось прочитать товар из БД.")
-            await callback.answer("Карточка временно недоступна. Попробуйте позже.", show_alert=True)
+            await callback.answer(
+                "Карточка временно недоступна. Попробуйте позже.", show_alert=True
+            )
             return
         if product is None:
-            await callback.answer("Товар не найден или сейчас недоступен. Откройте каталог заново.", show_alert=True)
+            await callback.answer(
+                "Товар не найден или сейчас недоступен. Откройте каталог заново.", show_alert=True
+            )
             return
         await callback.answer()
         await callback.message.answer(

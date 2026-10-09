@@ -8,7 +8,7 @@ from scentory.database.seed import PRODUCTS
 
 @asynccontextmanager
 async def connect(path: Path):
-    # Отдельное соединение на операцию: будущие транзакции обработчиков
+    # Отдельное соединение на операцию: транзакции обработчиков
     # не должны случайно смешиваться на одном общем соединении.
     async with aiosqlite.connect(path, timeout=5) as connection:
         connection.row_factory = aiosqlite.Row

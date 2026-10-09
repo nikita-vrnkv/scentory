@@ -1,31 +1,14 @@
 import asyncio
 import sqlite3
-import tempfile
-import unittest
-from pathlib import Path
 from unittest.mock import patch
-from aiogram import Dispatcher
 
-import test_catalog
-from scentory.database.connection import connect, initialize_database
+import support
+
+from scentory.database.connection import connect
 from scentory.database.repository import CartError, Repository
-from scentory.handlers.cart import create_cart_router
-from scentory.handlers.catalog import create_catalog_router
-from scentory.handlers.common import create_router
-from scentory.handlers.checkout import create_checkout_router
 
 
-class CartDatabaseTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.path = Path(directory.name) / "cart.sqlite3"
-        await initialize_database(self.path)
-        self.repository = Repository(self.path)
-        await self.repository.register_user(101)
-        await self.repository.register_user(202)
-        self.product_id = (await self.repository.list_products())[0].id
-
+class CartDatabaseTests(support.CustomerDatabaseTestCase):
     async def test_sum_and_persistence(self):
         products = await self.repository.list_products()
         await self.repository.add_to_cart(101, products[0].id, 2)
@@ -77,7 +60,10 @@ class CartDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_current_prices_and_unavailable_items(self):
         await self.repository.add_to_cart(101, self.product_id, 2)
         async with connect(self.path) as db:
-            await db.execute("UPDATE products SET price_kopecks = 123456, is_available = 0 WHERE id = ?", (self.product_id,))
+            await db.execute(
+                "UPDATE products SET price_kopecks = 123456, is_available = 0 WHERE id = ?",
+                (self.product_id,),
+            )
             await db.commit()
         cart = await self.repository.get_cart(101)
         self.assertEqual(cart.total, 246912)
@@ -90,7 +76,9 @@ class CartDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.repository.remove_from_cart(101, self.product_id)
 
     async def test_concurrent_additions(self):
-        await asyncio.gather(*(self.repository.add_to_cart(101, self.product_id) for _ in range(10)))
+        await asyncio.gather(
+            *(self.repository.add_to_cart(101, self.product_id) for _ in range(10))
+        )
         self.assertEqual((await self.repository.get_cart(101)).items[0].quantity, 10)
 
     async def test_missing_product_and_unregistered_user(self):
@@ -103,25 +91,18 @@ class CartDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_write_failure_preserves_cart(self):
         await self.repository.add_to_cart(101, self.product_id)
         async with connect(self.path) as db:
-            await db.execute("CREATE TRIGGER fail_update BEFORE UPDATE ON cart_items BEGIN SELECT RAISE(ABORT, 'test'); END")
+            await db.execute(
+                "CREATE TRIGGER fail_update BEFORE UPDATE ON cart_items BEGIN SELECT RAISE(ABORT, 'test'); END"
+            )
             await db.commit()
         with self.assertRaises(sqlite3.IntegrityError):
             await self.repository.change_cart_quantity(101, self.product_id, 1)
         self.assertEqual((await self.repository.get_cart(101)).items[0].quantity, 1)
 
 
-class CartRoutingTests(unittest.IsolatedAsyncioTestCase):
-    # Общий тестовый транспорт использует AsyncMock, а БД — временный файл.
-    send = test_catalog.CatalogTests.send
-    asyncTearDown = test_catalog.CatalogTests.asyncTearDown
-
+class CartRoutingTests(support.BotTestCase):
     async def asyncSetUp(self):
-        await test_catalog.CatalogTests.asyncSetUp(self)
-        self.dispatcher = Dispatcher(**self.dispatcher.workflow_data)
-        self.dispatcher.include_router(create_catalog_router())
-        self.dispatcher.include_router(create_checkout_router())
-        self.dispatcher.include_router(create_cart_router())
-        self.dispatcher.include_router(create_router())
+        await super().asyncSetUp()
         await self.send()
 
     async def test_full_cart_navigation(self):
@@ -138,7 +119,13 @@ class CartRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Корзина пуста", (await self.send("cart:checkout"))[-1].text)
 
     async def test_forged_and_old_callbacks(self):
-        for data in ("cart:planned", "cart:inc:-1", "cart:add:1:202", "cart:remove:abc", "cart:add:" + "9" * 30):
+        for data in (
+            "cart:planned",
+            "cart:inc:-1",
+            "cart:add:1:202",
+            "cart:remove:abc",
+            "cart:add:" + "9" * 30,
+        ):
             with self.subTest(data=data):
                 self.assertTrue((await self.send(data))[-1].show_alert)
         await self.send("cart:add:1")
@@ -154,9 +141,14 @@ class CartRoutingTests(unittest.IsolatedAsyncioTestCase):
             await db.commit()
         response = (await self.send("menu:cart"))[-1]
         self.assertIn("недоступен", response.text)
-        self.assertNotIn("cart:checkout", [b.callback_data for row in response.reply_markup.inline_keyboard for b in row])
+        self.assertNotIn(
+            "cart:checkout",
+            [b.callback_data for row in response.reply_markup.inline_keyboard for b in row],
+        )
         self.assertIn("недоступные", (await self.send("cart:checkout"))[-1].text)
 
     async def test_database_error(self):
-        with patch.object(self.repository, "add_to_cart", side_effect=sqlite3.OperationalError("test")):
+        with patch.object(
+            self.repository, "add_to_cart", side_effect=sqlite3.OperationalError("test")
+        ):
             self.assertIn("проверьте состав", (await self.send("cart:add:1"))[-1].text)

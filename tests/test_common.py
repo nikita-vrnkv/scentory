@@ -2,18 +2,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-from aiogram import Bot, Dispatcher
-from aiogram.types import Update
+import support
 
-from scentory.config import ConfigurationError, Settings, load_settings
-from scentory.handlers.common import create_router
-from scentory.handlers.admin import create_admin_router
-from scentory.database.repository import Repository
+from scentory.config import ConfigurationError, load_settings
 
 # Синтетическое значение только для локальных тестов; запросы в Telegram запрещены mock.
-TEST_TOKEN = "123456:" + "x" * 35
+TEST_TOKEN = support.TEST_TOKEN
 
 
 class ConfigTests(unittest.TestCase):
@@ -57,37 +53,17 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(load_settings(self.path).admin_ids, frozenset())
 
 
-class RoutingTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.bot = Bot(TEST_TOKEN)
-        self.bot.session = AsyncMock()
-        self.repository = AsyncMock(spec=Repository)
-        self.repository.admin_list_orders.return_value = []
-        self.dispatcher = Dispatcher(settings=Settings(TEST_TOKEN, frozenset({202}), Path("unused")), repository=self.repository)
-        self.dispatcher.include_router(create_admin_router())
-        self.dispatcher.include_router(create_router())
-
-    async def asyncTearDown(self):
-        await self.bot.session.close()
-
+class RoutingTests(support.BotTestCase):
     async def send(self, text="/start", user_id=101, callback=None):
-        user = {"id": user_id, "is_bot": False, "first_name": "Учебный"}
-        message = {"message_id": 1, "date": 0, "chat": {"id": user_id, "type": "private"},
-                   "from": user, "text": text}
-        if text.startswith("/"):
-            message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text)}]
-        payload = {"update_id": 1, "message": message}
-        if callback is not None:
-            payload = {"update_id": 2, "callback_query": {
-                "id": "test", "from": user, "chat_instance": "test", "message": message, "data": callback}}
-        await self.dispatcher.feed_update(self.bot, Update.model_validate(payload))
-        return self.bot.session.call_args.args[1]
+        return (await super().send(data=callback, user_id=user_id, text=text))[-1]
 
     async def test_start_customer(self):
         response = await self.send()
         self.assertIn("Scentory", response.text)
-        self.assertEqual([row[0].text for row in response.reply_markup.inline_keyboard],
-                         ["Каталог", "Корзина", "Мои заказы"])
+        self.assertEqual(
+            [row[0].text for row in response.reply_markup.inline_keyboard],
+            ["Каталог", "Корзина", "Мои заказы"],
+        )
 
     async def test_start_manager(self):
         response = await self.send(user_id=202)
@@ -107,8 +83,11 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_manager_callback(self):
         self.assertIn("Новые заказы", (await self.send(user_id=202, callback="menu:admin")).text)
 
-    async def test_placeholder_and_stale_buttons(self):
+    async def test_stale_buttons(self):
         self.assertIn("устарела", (await self.send(callback="old:button")).text)
+
+    async def test_unrelated_text_uses_common_help(self):
+        self.assertIn("/myid", (await self.send("Привет")).text)
 
 
 if __name__ == "__main__":

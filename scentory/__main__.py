@@ -8,15 +8,15 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.types import ErrorEvent
 
-from scentory.config import ConfigurationError, load_settings
-from scentory.handlers.common import create_router
-from scentory.handlers.catalog import create_catalog_router
-from scentory.handlers.cart import create_cart_router
-from scentory.handlers.checkout import create_checkout_router
-from scentory.handlers.orders import create_orders_router
-from scentory.handlers.admin import create_admin_router
+from scentory.config import ConfigurationError, Settings, load_settings
 from scentory.database.connection import initialize_database
 from scentory.database.repository import Repository
+from scentory.handlers.admin import create_admin_router
+from scentory.handlers.cart import create_cart_router
+from scentory.handlers.catalog import create_catalog_router
+from scentory.handlers.checkout import create_checkout_router
+from scentory.handlers.common import create_router
+from scentory.handlers.orders import create_orders_router
 
 logger = logging.getLogger("scentory")
 
@@ -27,10 +27,9 @@ async def safe_error_handler(event: ErrorEvent) -> bool:
     return True
 
 
-async def main() -> None:
-    settings = load_settings()
-    await initialize_database(settings.database_path)
-    dispatcher = Dispatcher(settings=settings, repository=Repository(settings.database_path, settings.admin_ids))
+def create_dispatcher(settings: Settings, repository: Repository) -> Dispatcher:
+    """Один порядок обработчиков для приложения и проверок без Telegram."""
+    dispatcher = Dispatcher(settings=settings, repository=repository)
     # Специальные обработчики идут раньше общего ответа на устаревшие кнопки.
     dispatcher.include_router(create_catalog_router())
     dispatcher.include_router(create_admin_router())
@@ -39,6 +38,13 @@ async def main() -> None:
     dispatcher.include_router(create_cart_router())
     dispatcher.include_router(create_router())
     dispatcher.errors.register(safe_error_handler)
+    return dispatcher
+
+
+async def main() -> None:
+    settings = load_settings()
+    await initialize_database(settings.database_path)
+    dispatcher = create_dispatcher(settings, Repository(settings.database_path, settings.admin_ids))
     async with Bot(token=settings.bot_token) as bot:
         # Проверяем доступ до сообщения о старте, не печатая сведения об аккаунте.
         await bot.get_me()
@@ -63,7 +69,9 @@ def run() -> int:
         logger.error("Telegram отклонил BOT_TOKEN. Проверьте его локально.")
         return 1
     except (sqlite3.Error, OSError):
-        logger.error("Не удалось открыть базу или файлы проекта. Проверьте DATABASE_PATH и права доступа.")
+        logger.error(
+            "Не удалось открыть базу или файлы проекта. Проверьте DATABASE_PATH и права доступа."
+        )
         return 1
     except TelegramNetworkError:
         logger.error("Нет соединения с Telegram. Проверьте интернет и повторите запуск.")
@@ -71,7 +79,10 @@ def run() -> int:
     except (KeyboardInterrupt, SystemExit):
         logger.info("Scentory остановлен.")
     except Exception as error:
-        logger.error("Не удалось запустить бота (%s). Проверьте настройки и соединение.", type(error).__name__)
+        logger.error(
+            "Не удалось запустить бота (%s). Проверьте настройки и соединение.",
+            type(error).__name__,
+        )
         return 1
     return 0
 

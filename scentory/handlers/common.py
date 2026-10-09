@@ -42,7 +42,10 @@ def create_router() -> Router:
     async def home(callback: CallbackQuery, settings: Settings) -> None:
         await callback.answer()
         if isinstance(callback.message, Message):
-            await callback.message.answer("Scentory — главное меню", reply_markup=main_menu(settings.is_admin(callback.from_user.id)))
+            await callback.message.answer(
+                "Scentory — главное меню",
+                reply_markup=main_menu(settings.is_admin(callback.from_user.id)),
+            )
 
     @router.callback_query()
     async def outdated_button(callback: CallbackQuery) -> None:

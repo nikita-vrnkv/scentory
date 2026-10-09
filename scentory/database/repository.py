@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from scentory.database.admin import AdminRepository
 from scentory.database.connection import connect
 from scentory.database.orders import OrderRepository
-from scentory.database.admin import AdminRepository
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,8 @@ class Repository(OrderRepository, AdminRepository):
                 "SELECT p.id AS product_id, p.name, p.volume_ml, p.price_kopecks, "
                 "c.quantity, p.is_available FROM cart_items c "
                 "JOIN users u ON u.id = c.user_id JOIN products p ON p.id = c.product_id "
-                "WHERE u.telegram_id = ? ORDER BY p.id", (telegram_id,),
+                "WHERE u.telegram_id = ? ORDER BY p.id",
+                (telegram_id,),
             ) as cursor:
                 return Cart(tuple(CartItem(**dict(row)) for row in await cursor.fetchall()))
 
@@ -77,7 +78,9 @@ class Repository(OrderRepository, AdminRepository):
     async def remove_from_cart(self, telegram_id: int, product_id: int) -> None:
         await self._mutate_cart(telegram_id, product_id, "remove")
 
-    async def _mutate_cart(self, telegram_id: int, product_id: int, action: str, amount: int = 0) -> None:
+    async def _mutate_cart(
+        self, telegram_id: int, product_id: int, action: str, amount: int = 0
+    ) -> None:
         if type(product_id) is not int or not 0 < product_id <= 9223372036854775807:
             raise CartError("Товар не найден. Откройте каталог заново.")
         async with connect(self.path) as db:
@@ -85,21 +88,29 @@ class Repository(OrderRepository, AdminRepository):
                 # Блокировка берётся ДО чтения количества: параллельные нажатия
                 # последовательно меняют актуальную строку, не теряя прибавления.
                 await db.execute("BEGIN IMMEDIATE")
-                async with db.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)) as cursor:
+                async with db.execute(
+                    "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+                ) as cursor:
                     user = await cursor.fetchone()
                 if user is None:
                     raise CartError("Сначала откройте магазин командой /start.")
                 user_id = user["id"]
                 async with db.execute(
-                    "SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?", (user_id, product_id)
+                    "SELECT quantity FROM cart_items WHERE user_id = ? AND product_id = ?",
+                    (user_id, product_id),
                 ) as cursor:
                     item = await cursor.fetchone()
                 if action != "add" and item is None:
                     raise CartError("Позиции уже нет в вашей корзине. Откройте корзину заново.")
                 if action == "remove":
-                    await db.execute("DELETE FROM cart_items WHERE user_id = ? AND product_id = ?", (user_id, product_id))
+                    await db.execute(
+                        "DELETE FROM cart_items WHERE user_id = ? AND product_id = ?",
+                        (user_id, product_id),
+                    )
                 else:
-                    async with db.execute("SELECT is_available FROM products WHERE id = ?", (product_id,)) as cursor:
+                    async with db.execute(
+                        "SELECT is_available FROM products WHERE id = ?", (product_id,)
+                    ) as cursor:
                         product = await cursor.fetchone()
                     if product is None or (not product["is_available"] and amount > 0):
                         raise CartError("Товар не найден или сейчас недоступен.")
@@ -123,12 +134,14 @@ class Repository(OrderRepository, AdminRepository):
             raise ValueError("Нужен положительный числовой Telegram ID.")
         async with connect(self.path) as connection:
             # Не копируем имена и username из профиля. Псевдоним покупатель
-            # сможет задать сам при оформлении на следующем этапе.
+            # задаёт сам при оформлении заказа.
             await connection.execute(
                 "INSERT INTO users (telegram_id) VALUES (?) ON CONFLICT(telegram_id) DO NOTHING",
                 (telegram_id,),
             )
-            async with connection.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)) as cursor:
+            async with connection.execute(
+                "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+            ) as cursor:
                 row = await cursor.fetchone()
             await connection.commit()
             return row["id"]
@@ -147,7 +160,8 @@ class Repository(OrderRepository, AdminRepository):
         async with connect(self.path) as connection:
             async with connection.execute(
                 "SELECT id, name, description, volume_ml, price_kopecks "
-                "FROM products WHERE id = ? AND is_available = 1", (product_id,)
+                "FROM products WHERE id = ? AND is_available = 1",
+                (product_id,),
             ) as cursor:
                 row = await cursor.fetchone()
                 return Product(**dict(row)) if row else None

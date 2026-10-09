@@ -34,7 +34,9 @@ def load_settings(env_file: Path = PROJECT_ROOT / ".env") -> Settings:
     try:
         validate_token(token)
     except TokenValidationError:
-        raise ConfigurationError("BOT_TOKEN имеет неверный формат. Проверьте локальный .env.") from None
+        raise ConfigurationError(
+            "BOT_TOKEN имеет неверный формат. Проверьте локальный .env."
+        ) from None
 
     raw_ids = os.getenv("ADMIN_IDS", "").strip()
     admin_ids: set[int] = set()
@@ -42,10 +44,14 @@ def load_settings(env_file: Path = PROJECT_ROOT / ".env") -> Settings:
         for part in raw_ids.split(","):
             value = part.strip()
             if not value.isascii() or not value.isdecimal() or int(value) <= 0:
-                raise ConfigurationError("ADMIN_IDS: нужны положительные числовые ID через запятую.")
+                raise ConfigurationError(
+                    "ADMIN_IDS: нужны положительные числовые ID через запятую."
+                )
             admin_ids.add(int(value))
 
-    path = Path(os.getenv("DATABASE_PATH", "data/scentory.sqlite3").strip() or "data/scentory.sqlite3")
+    path = Path(
+        os.getenv("DATABASE_PATH", "data/scentory.sqlite3").strip() or "data/scentory.sqlite3"
+    )
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return Settings(token, frozenset(admin_ids), path)
